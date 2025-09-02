@@ -41,11 +41,9 @@ class QMLP(nn.Module):
         self.output_transform = nn.Linear(
             in_features=hidden_size, out_features=(frc_dim*num_quantiles))
 
-        # Move model to device after initialization
         self.to(self.device)
 
     def forward(self, x: torch.Tensor):
-        # Ensure input is on the same device as the model
         x = x.to(self.device)
         z = self.input_transform(x)
         z = self.hidden_net(z)
@@ -55,5 +53,4 @@ class QMLP(nn.Module):
         return out
 
     def get_device(self):
-        """Helper method to get the device of the model"""
         return next(self.parameters()).device
