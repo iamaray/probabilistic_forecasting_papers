@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 from ffnn.model import QMLP
 from ffnn.trainer import Trainer, quantileLoss
+from lstm.model import QLSTM
 import matplotlib.pyplot as plt
 import numpy as np
 from processing.transforms import *
@@ -31,17 +32,24 @@ def main():
 
     quantiles = torch.tensor([0.1, 0.5, 0.9])
 
-    model = QMLP(
-        in_dim=input_dim,
-        frc_dim=frc_dim,
-        depth=3,
+    # model = QMLP(
+    #     in_dim=input_dim,
+    #     frc_dim=frc_dim,
+    #     depth=3,
+    #     hidden_size=128,
+    #     dropout=0.1,
+    #     num_quantiles=3,
+    #     device=device
+    # )
+
+    model = QLSTM(
+        input_size=C, 
         hidden_size=128,
-        dropout=0.1,
-        num_quantiles=3,
-        device=device
+        num_layers=3,
+        dropout=0.1
     )
 
-    num_epochs = 100
+    num_epochs = 1
 
     trainer = Trainer(
         model=model,
@@ -147,7 +155,7 @@ def main():
     plt.fill_between(time_axis, q10_series, q90_series,
                      alpha=0.2, color='lightblue', label='80% CI')
 
-    plt.title('QMLP Probabilistic Forecasting - Entire Test Period',
+    plt.title('QLSTM Probabilistic Forecasting - Entire Test Period',
               fontsize=16, fontweight='bold')
     plt.xlabel('Time (hours)', fontsize=14)
     plt.ylabel('Energy Price', fontsize=14)
