@@ -45,7 +45,10 @@ class QMLP(nn.Module):
 
     def forward(self, x: torch.Tensor):
         x = x.to(self.device)
-        z = self.input_transform(x)
+        B, _, _ = x.shape
+        z = x.view(B, -1)
+        
+        z = self.input_transform(z)
         z = self.hidden_net(z)
         out = self.output_transform(z)
 
