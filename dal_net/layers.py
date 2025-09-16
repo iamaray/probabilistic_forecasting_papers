@@ -112,8 +112,44 @@ class TMSAB(nn.Module):
         self._mask_cache_N = None
         self._mask_cache = None  # [H, N, N] bool
 
-    def forward(self):
-        pass
+    def _get_masks(self, seq_len: int, device: torch.Device):
+        if self._mask_cache is None or self._mask_cache_N != N or self._mask_cache.device != device:
+            self._mask_cache = _stack_masks(
+                N, self.head_specs, device=device)  # [H, N, N]
+            self._mask_cache_N = N
+        return self._mask_cache  # bool
+
+    def forward(self, x: torch.Tensor):
+        B, N, H = x.shape
+        assert H == self.d_model
+
+        x0 = x
+        x = self.ln_in(x)
+
+        Q = self.Wq(x).view(B, N, self.n_heads, self.head_dim).transpose(1, 2)
+        K = self.Wk(x).view(B, N, self.n_heads, self.head_dim).transpose(1, 2)
+        V = self.Wv(x).view(B, N, self.n_heads, self.head_dim).transpose(1, 2)
+
+        attn = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
+
+        mask = self._get_masks(N, device=x.device)  # [h ,N, N] bool
+        mask = mask.unsqueeze(0).expand(B, -1, -1, -1)
+
+        attn = attn.masked_fill(~mask, float("-inf"))
+        attn = F.softmax(attn, dim=-1)
+
+        out = torch.matmul(attn, V)
+        out = out.transpose(1, 2).contiguous().view(
+            B, N, self.n_heads * self.head_dim)
+        out = self.Wo(out)  # [B, N, H]
+
+        T_logits = self.T_lin2(torch.tanh(self.T_lin1(x)))  # [B, N, 1]
+        T = F.softmax(T_logits, dim=1)
+
+        out = out * T
+
+        out = self.ln_out(out + x0)
+        return out
 
 
 if __name__ == "__main__":
