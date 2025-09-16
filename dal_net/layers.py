@@ -85,7 +85,6 @@ class TMSAB(nn.Module):
             self,
             d_model: int,
             n_heads: int,
-            head_dim: int,
             head_specs: List[HeadSpec],
             t_gate_hidden: Optional[int] = None):
         super().__init__()
@@ -93,14 +92,14 @@ class TMSAB(nn.Module):
         assert len(head_specs) == n_heads
         self.d_model = d_model
         self.n_heads = n_heads
-        self.head_dim = head_dim
+        self.head_dim = d_model // n_heads
         self.head_specs = head_specs
-        self.scale = 1.0 / math.sqrt(head_dim)
+        self.scale = 1.0 / math.sqrt(self.head_dim)
 
-        self.Wq = nn.Linear(d_model, n_heads * head_dim, bias=False)
-        self.Wk = nn.Linear(d_model, n_heads * head_dim, bias=False)
-        self.Wv = nn.Linear(d_model, n_heads * head_dim, bias=False)
-        self.Wo = nn.Linear(n_heads * head_dim, d_model, bias=False)
+        self.Wq = nn.Linear(d_model, n_heads * self.head_dim, bias=False)
+        self.Wk = nn.Linear(d_model, n_heads * self.head_dim, bias=False)
+        self.Wv = nn.Linear(d_model, n_heads * self.head_dim, bias=False)
+        self.Wo = nn.Linear(n_heads * self.head_dim, d_model, bias=False)
 
         hidden_t = t_gate_hidden or d_model
         self.T_lin1 = nn.Linear(d_model, hidden_t, bias=True)
@@ -112,12 +111,14 @@ class TMSAB(nn.Module):
         self._mask_cache_N = None
         self._mask_cache = None  # [H, N, N] bool
 
-    def _get_masks(self, seq_len: int, device: torch.Device):
-        if self._mask_cache is None or self._mask_cache_N != N or self._mask_cache.device != device:
+    def _get_masks(self, seq_len: int, device: torch.device):
+        if (self._mask_cache is None
+            or self._mask_cache_N != seq_len
+                or self._mask_cache.device != device):
             self._mask_cache = _stack_masks(
-                N, self.head_specs, device=device)  # [H, N, N]
-            self._mask_cache_N = N
-        return self._mask_cache  # bool
+                seq_len, self.head_specs, device=device)
+            self._mask_cache_N = seq_len
+        return self._mask_cache
 
     def forward(self, x: torch.Tensor):
         B, N, H = x.shape
@@ -150,12 +151,3 @@ class TMSAB(nn.Module):
 
         out = self.ln_out(out + x0)
         return out
-
-
-if __name__ == "__main__":
-    emb = TimeEmb()
-
-    t = 1
-
-    temb = emb(t)
-    print(temb.shape)
