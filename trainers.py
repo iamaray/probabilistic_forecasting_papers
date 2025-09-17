@@ -299,7 +299,7 @@ class DDPMTrainer(nn.Module):
             lr = self.scheduler.get_last_lr()[0]
             print(
                 f"Epoch {epoch+1}/{num_epochs}: "
-                f"train={train_epoch_loss:.6f}"
-                + (f", val={eval_epoch_loss:.6f}" if eval_epoch_loss is not None else "")
+                f"train loss = {train_epoch_loss:.6f}"
+                + (f", val loss = {eval_epoch_loss:.6f}" if eval_epoch_loss is not None else "")
                 + f", lr={lr:.2e}"
             )

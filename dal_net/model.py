@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import List
 
 from .layers import TimeEmb, TMSAB, HeadSpec
@@ -10,7 +11,6 @@ class DALNet(nn.Module):
             self,
             lstm_hidden_dim,
             num_feats,
-            n_heads,
             dt,
             cond_dim,
             head_types: List[HeadSpec],
@@ -20,7 +20,6 @@ class DALNet(nn.Module):
             device):
 
         super().__init__()
-        assert d_model % n_heads == 0
 
         self.device = device or "cpu"
 
@@ -31,6 +30,9 @@ class DALNet(nn.Module):
                             batch_first=True)
 
         d_model = lstm_hidden_dim + cond_dim + dt
+        n_heads = len(head_types)
+        assert d_model % n_heads == 0
+
         self.conv_net = nn.Sequential(
             nn.Conv1d(in_channels=d_model,
                       out_channels=d_model, kernel_size=1),
