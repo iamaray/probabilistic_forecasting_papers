@@ -20,6 +20,7 @@ class DALNet(nn.Module):
             device):
 
         super().__init__()
+        assert d_model % n_heads == 0
 
         self.device = device or "cpu"
 
@@ -61,6 +62,10 @@ class DALNet(nn.Module):
         y = y.to(self.device)
         x = x.to(self.device)
 
+        if isinstance(t, torch.Tensor):
+            t = t.to(self.device).item() if t.numel(
+            ) == 1 else int(t.squeeze().item())
+
         B, N = y.shape
 
         seq, _ = self.lstm(y.unsqueeze(-1))  # [B, N, H]
@@ -76,9 +81,9 @@ class DALNet(nn.Module):
         # [B, N, (H + C + 1)]
         atten_in = torch.cat([seq, proj_feats, t_vec], dim=-1)
         # [B, N, (H + C + 1)]
-        atten_out=self.atten(atten_in)
+        atten_out = self.atten(atten_in)
 
-        y_hat=self.conv_net(atten_out.transpose(
+        y_hat = self.conv_net(atten_out.transpose(
             1, 2)).transpose(1, 2).squeeze(-1)  # [B, N]
 
         return y_hat

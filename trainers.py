@@ -145,36 +145,53 @@ class QRTrainer(nn.Module):
         return avg_test_loss, test_res
 
 
+@torch.no_grad()
 def sample_ddpm_model(
         model: nn.Module,
         variance_sched: torch.Tensor,
+        # [B, L, C]
         cond: torch.Tensor,
-        in_shape: Tuple,
-        num_samples: int):
+        out_shape: Tuple[int, ...],
+        num_samples: int,
+        device: Optional[torch.device] = None):
 
-    T = variance_sched.shape[0]
-    alphas = torch.cumprod(1 - variance_sched)  # [T]
+    device = device or next(model.parameters()).device
+    beta = variance_sched.to(device).clamp_(1e-8, 0.999)  # [T]
+    T = beta.shape[0]
+    alpha = 1.0 - beta                                   # [T]
+    alphabar = torch.cumprod(alpha, dim=0)               # [T]
+
+    def tilde_beta(t: int) -> torch.Tensor:
+        ab_t = alphabar[t]
+        ab_tm1 = alphabar[t-1] if t > 0 else torch.tensor(
+            1.0, device=device, dtype=ab_t.dtype)
+        return ((1.0 - ab_tm1) / (1.0 - ab_t)) * beta[t]
 
     samples = []
 
-    for i in range(num_samples):
-        y_i = torch.randn(in_shape)
+    cond = cond.to(device)
 
-        for t in range(0, T, -1):
-            z = torch.randn(in_shape)
-            recip_sqrt_beta = 1/(torch.sqrt(1-variance_sched[t]))
-            recip_sqrt_alpha = 1/(torch.sqrt(1-variance_sched[t]))
-            sqrt_beta_tilde = torch.sqrt(
-                ((1 - alphas[t+1])/(1-alphas[t])) * variance_sched[t])
+    for _ in range(num_samples):
+        y_t = torch.randn(out_shape, device=device)
 
-            pred_noise = model(y_i, cond, t)
-            y_i = recip_sqrt_beta * \
-                (y_i - (variance_sched[t] * recip_sqrt_alpha *
-                 pred_noise)) + (sqrt_beta_tilde * z)
+        for t in reversed(range(T)):
+            sqrt_inv_alpha_t = (1.0 / alpha[t].sqrt())
+            sqrt_one_minus_ab_t = (1.0 - alphabar[t]).sqrt()
 
-        samples.append(y_i.unsqueeze(0))
+            eps_pred = model(y_t, cond, t)
+            y_mean = sqrt_inv_alpha_t * \
+                (y_t - beta[t] / sqrt_one_minus_ab_t * eps_pred)
 
-    return torch.cat(samples)  # [num_samples, B, L]
+            if t > 0:
+                z = torch.randn_like(y_t)
+                sigma_t = tilde_beta(t).sqrt()
+                y_t = y_mean + sigma_t * z
+            else:
+                y_t = y_mean
+
+        samples.append(y_t.unsqueeze(0))
+
+    return torch.cat(samples, dim=0)   # [num_samples, *out_shape]
 
 
 class DDPMTrainer(nn.Module):
@@ -183,19 +200,15 @@ class DDPMTrainer(nn.Module):
             model: nn.Module,
             variance_sched: torch.Tensor,
             device: Optional[torch.device] = None,
-            lr: float = 0.001,
+            lr: float = 1e-3,
             max_grad_norm: float = 1.0,
             T_max: int = 20):
 
         super().__init__()
-        """
-            DDPM trainer for DDPM-esque diffusion models.
-        """
         self.device = device if device is not None else torch.device(
             "cuda" if torch.cuda.is_available() else "cpu")
 
-        self.model = model.to(device)
-        self.quantiles = quantiles.to(device)
+        self.model = model.to(self.device)
         self.max_grad_norm = max_grad_norm
 
         self.optim = torch.optim.Adam(self.model.parameters(), lr=lr)
@@ -204,51 +217,73 @@ class DDPMTrainer(nn.Module):
 
         self.running_train_loss = []
         self.running_val_loss = []
-        self.running_test_loss = []
 
-        self.variance_sched = variance_sched.to(self.device)  # [T]
-        self.T = self.variance_sched.shape[0]
+        self.beta = variance_sched.to(self.device).clamp_(1e-8, 0.999)  # [T]
+        self.T = self.beta.shape[0]
+        self.alpha = 1.0 - self.beta                     # [T]
+        self.alphabar = torch.cumprod(self.alpha, dim=0)  # [T]
 
-        alphas = torch.cumprod(1 - self.variance_sched)  # [T]
-        one_minus_alphas = 1 - alphas  # [T]
-        self.noise_coefs = torch.cat(
-            [torch.sqrt(alphas).unsqueeze(-1), torch.sqrt(one_minus_alphas).unsqueeze(-1)], dim=-1)  # [T, 2]
-
-        self.criterion = nn.MSELoss()
+        self.mse = nn.MSELoss()
 
     def _train_epoch(self, train_loader: DataLoader):
         self.model.train()
         epoch_loss = 0.0
         num_batches = 0
 
-        for (x, y) in train_loader:
-            # x: [B, H, C]
-            # y: [B, pred]
-            x = x.to(self.device)
-            y = y.to(self.device)
+        for (x_hist, y_future) in train_loader:
+            # x_hist: [B, L, C]  (condition)
+            # y_future: [B, N]   (x_0)
+            x_hist = x_hist.to(self.device)
+            y0 = y_future.to(self.device)
 
-            noise = torch.randn_like(y)  # [B, pred]
-            t = torch.randint(0, self.T, (y.size(0),), device=self.device)
+            B, N = y0.shape
 
-            self.optim.zero_grad()
+            t = torch.randint(low=0, high=self.T, size=(),
+                              device=self.device).item()  # scalar
 
-            out = self.model(
-                y * self.noise_coefs[t, 0] + noise * self.noise_coefs[t, 1], x, t)  # [B, pred]
-            loss = quantileLoss(out, noise, quantiles=self.quantiles)
+            eps = torch.randn_like(y0)               # [B, N]
+            sqrt_ab_t = self.alphabar[t].sqrt()    # scalar
+            sqrt_1mab_t = (1.0 - self.alphabar[t]).sqrt()  # scalar
+            x_t = sqrt_ab_t * y0 + sqrt_1mab_t * eps       # [B, N]
+
+            self.optim.zero_grad(set_to_none=True)
+
+            eps_pred = self.model(x_t, x_hist, t)    # [B, N]
+            loss = self.mse(eps_pred, eps)
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), self.max_grad_norm)
             self.optim.step()
 
-            epoch_loss += loss.item()
+            epoch_loss += float(loss.item())
             num_batches += 1
 
-        epoch_loss /= num_batches
-        return epoch_loss
+        return epoch_loss / max(1, num_batches)
 
     def _eval_epoch(self, val_loader: DataLoader):
-        pass
+        self.model.eval()
+        val_loss = 0.0
+        num_batches = 0
+        with torch.no_grad():
+            for (x_hist, y_future) in val_loader:
+                x_hist = x_hist.to(self.device)
+                y0 = y_future.to(self.device)
+                B, N = y0.shape
+
+                t = torch.randint(low=0, high=self.T, size=(),
+                                  device=self.device).item()
+                eps = torch.randn_like(y0)
+                sqrt_ab_t = self.alphabar[t].sqrt()
+                sqrt_1mab_t = (1.0 - self.alphabar[t]).sqrt()
+                x_t = sqrt_ab_t * y0 + sqrt_1mab_t * eps
+
+                eps_pred = self.model(x_t, x_hist, t)
+                loss = self.mse(eps_pred, eps)
+
+                val_loss += float(loss.item())
+                num_batches += 1
+        return val_loss / max(1, num_batches)
 
     def train(self, train_loader: DataLoader, val_loader: Optional[DataLoader], num_epochs: int):
         for epoch in range(num_epochs):
@@ -261,5 +296,10 @@ class DDPMTrainer(nn.Module):
                 self.running_val_loss.append(eval_epoch_loss)
 
             self.scheduler.step()
+            lr = self.scheduler.get_last_lr()[0]
             print(
-                f"Epoch {i+1}/{num_epochs}: train loss = {train_epoch_loss:.6f}, eval loss = {eval_epoch_loss:.6f}, lr = {self.scheduler.get_last_lr()[0]:.2e}")
+                f"Epoch {epoch+1}/{num_epochs}: "
+                f"train={train_epoch_loss:.6f}"
+                + (f", val={eval_epoch_loss:.6f}" if eval_epoch_loss is not None else "")
+                + f", lr={lr:.2e}"
+            )
