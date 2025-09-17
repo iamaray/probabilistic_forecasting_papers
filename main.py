@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from processing.transforms import *
 
-from trainers import QRTrainer, DDPMTrainer
+from trainers import QRTrainer, DDPMTrainer, sample_ddpm_model
 from dal_net.model import DALNet
 from dal_net.layers import HeadSpec
 
@@ -60,7 +60,10 @@ def main():
         lr=1e-3,
     )
 
-    trainer.train(train_loader=train_loader, val_loader=None, num_epochs=5)
+    trainer.train(train_loader=train_loader, val_loader=None, num_epochs=1)
+
+    samples = sample_ddpm_model(model, variance_sched, x_sample, (64, 24), 5, device)
+    print(samples.shape)
 
 
 if __name__ == "__main__":

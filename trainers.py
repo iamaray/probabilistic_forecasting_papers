@@ -4,15 +4,21 @@ from torch.utils.data import DataLoader
 from typing import Optional, Tuple
 
 
-def quantileLoss(
-        y_pred: torch.Tensor,  # [B, H, Q]
-        y_true: torch.Tensor,  # [B, H]
-        quantiles: torch.Tensor):
+def pinball_loss(y_pred: torch.Tensor,   # [..., Q]
+                 y_true: torch.Tensor,
+                 quantiles: torch.Tensor,  # [Q] in (0,1), ascending
+                 reduction: str = "mean") -> torch.Tensor:
+    """
+    Works for [B, H, Q] vs [B, H] or [B, Q] vs [B], etc.
+    """
+    if y_true.dim() == y_pred.dim() - 1:
+        y_true = y_true.unsqueeze(-1)
+    e = y_true - y_pred
 
-    diff = y_true.unsqueeze(-1) - y_pred
-    q = quantiles.view(1, 1, -1).to(y_pred.device)
+    q = quantiles.to(device=y_pred.device, dtype=y_pred.dtype)
+    q = q.view(*([1] * (e.ndim - 1)), -1)
 
-    return torch.mean(torch.max(q*diff, (q-1)*diff))
+    loss = torch.mean(torch.maximum(q * e, (q - 1.0) * e))  # [..., Q]
 
 
 class QRTrainer(nn.Module):
