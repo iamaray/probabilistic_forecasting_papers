@@ -16,7 +16,6 @@ class DALNet(nn.Module):
             head_types: List[HeadSpec],
             num_lstm_layers,
             num_conv_layers,
-            feature_seq_len,
             pred_seq_len,
             device):
 
@@ -30,13 +29,15 @@ class DALNet(nn.Module):
                             bidirectional=False,
                             batch_first=True)
 
-        d_model = num_feats + lstm_hidden_dim + dt
+        d_model = lstm_hidden_dim + cond_dim + dt
         self.conv_net = nn.Sequential(
             nn.Conv1d(in_channels=d_model,
                       out_channels=d_model, kernel_size=1),
             nn.SiLU(),
-            *[nn.Sequential(nn.Conv1d(d_model, d_model, kernel_size=3, padding=1), nn.SiLU())
-              for _ in range(num_conv_layers - 1)],
+            *[nn.Sequential(
+                nn.Conv1d(d_model, d_model, kernel_size=3, padding=1),
+                nn.SiLU()
+            ) for _ in range(num_conv_layers - 1)],
             nn.Conv1d(in_channels=d_model, out_channels=1, kernel_size=1),
         )
 
@@ -51,13 +52,14 @@ class DALNet(nn.Module):
 
         self.atten = TMSAB(d_model, n_heads, head_types)
 
-    def forward(self, y: torch.Tensor, x: torch.Tensor, t: int):
+    def forward(self, y: torch.Tensor, x: torch.Tensor, t: torch.Tensor):
         """
             y: [B, N]       Noised input
             x: [B, L, C]    Historical & feature input
+            t: [1]
         """
-        y.to(self.device)
-        x.to(self.device)
+        y = y.to(self.device)
+        x = x.to(self.device)
 
         B, N = y.shape
 
@@ -72,11 +74,11 @@ class DALNet(nn.Module):
         t_vec = t_vec.view(1, 1, -1).expand(B, N, -1)       # [B, N, d_t]
 
         # [B, N, (H + C + 1)]
-        atten_in = torch.cat([seq, proj_feats, t_emb], dim=-1)
+        atten_in = torch.cat([seq, proj_feats, t_vec], dim=-1)
         # [B, N, (H + C + 1)]
-        atten_out = self.atten(atten_in)
+        atten_out=self.atten(atten_in)
 
-        y_hat = self.conv_net(atten_out.transpose(
+        y_hat=self.conv_net(atten_out.transpose(
             1, 2)).transpose(1, 2).squeeze(-1)  # [B, N]
 
         return y_hat
