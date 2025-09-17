@@ -6,6 +6,13 @@ from typing import List
 from .layers import TimeEmb, TMSAB, HeadSpec
 
 
+# def pad_to_batch(x: torch.Tensor, B: int):
+#     if x.size(0) < B:
+#         pad_amt = B - x.size(0)
+#         x = torch.nn.functional.pad(x, (0, 0) * (x.dim() - 1) + (0, pad_amt))
+#     return x
+
+
 class DALNet(nn.Module):
     def __init__(
             self,
@@ -80,7 +87,11 @@ class DALNet(nn.Module):
         t_vec = self.diffus_step_emb(t)                      # [d_t]
         t_vec = t_vec.view(1, 1, -1).expand(B, N, -1)       # [B, N, d_t]
 
-        # [B, N, (H + C + 1)]
+        # [B, N, (H + C + dt)]
+        # seq = pad_to_batch(seq, B)
+        # proj_feats = pad_to_batch(proj_feats, B)
+        # t_vec = pad_to_batch(t_vec, B)
+
         atten_in = torch.cat([seq, proj_feats, t_vec], dim=-1)
         # [B, N, (H + C + 1)]
         atten_out = self.atten(atten_in)

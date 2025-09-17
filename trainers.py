@@ -1,24 +1,93 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from torch.utils.data import DataLoader
 from typing import Optional, Tuple
 
 
-def pinball_loss(y_pred: torch.Tensor,   # [..., Q]
-                 y_true: torch.Tensor,
-                 quantiles: torch.Tensor,  # [Q] in (0,1), ascending
-                 reduction: str = "mean") -> torch.Tensor:
+import torch
+
+
+# def pad_to_batch(x: torch.Tensor, B: int):
+#     if x.size(0) < B:
+#         pad_amt = B - x.size(0)
+#         x = torch.nn.functional.pad(x, (0, 0) * (x.dim() - 1) + (0, pad_amt))
+#     return x
+
+
+def quantileLoss(y_pred: torch.Tensor,   # [..., Q]
+                 y_true: torch.Tensor,   # [...]
+                 quantiles: torch.Tensor  # [Q] in (0,1), ascending
+                 ) -> torch.Tensor:
     """
-    Works for [B, H, Q] vs [B, H] or [B, Q] vs [B], etc.
+    Pinball (quantile) loss over all elements and all quantiles.
+    y_pred and y_true must broadcast to the same leading dims; y_pred ends with Q.
     """
     if y_true.dim() == y_pred.dim() - 1:
         y_true = y_true.unsqueeze(-1)
-    e = y_true - y_pred
+
+    e = y_true - y_pred                                 # [..., Q]
 
     q = quantiles.to(device=y_pred.device, dtype=y_pred.dtype)
     q = q.view(*([1] * (e.ndim - 1)), -1)
 
-    loss = torch.mean(torch.maximum(q * e, (q - 1.0) * e))  # [..., Q]
+    loss = torch.maximum(q * e, (q - 1.0) * e)          # [..., Q]
+    return loss.mean()                                  # scalar
+
+
+def ACR(y: torch.Tensor, frc_top: torch.Tensor, frc_bottom: torch.Tensor):
+    """Average coverage rate: fraction of targets that fall within [lower, upper]."""
+    lower = torch.minimum(frc_bottom, frc_top)
+    upper = torch.maximum(frc_bottom, frc_top)
+
+    valid = torch.isfinite(y) & torch.isfinite(lower) & torch.isfinite(upper)
+    if valid.sum() == 0:
+        return torch.tensor(float('nan'), device=y.device)
+
+    covered = (y >= lower) & (y <= upper)
+    return (covered & valid).float().sum() / valid.float().sum()
+
+
+def AIL(y: torch.Tensor, frc_top: torch.Tensor, frc_bottom: torch.Tensor):
+    """Average interval length: mean of (upper - lower) over valid bounds."""
+    lower = torch.minimum(frc_bottom, frc_top)
+    upper = torch.maximum(frc_bottom, frc_top)
+
+    valid = torch.isfinite(lower) & torch.isfinite(upper)
+    if valid.sum() == 0:
+        return torch.tensor(float('nan'), device=lower.device)
+
+    lengths = (upper - lower).clamp_min(0)
+    return lengths[valid].mean()
+
+
+def compute_metrics(
+        y_true: torch.Tensor,       # [B, pred]
+        # [B, pred, D]  (D=Q for quantile models; D=num_samples for sampled)
+        y_pred: torch.Tensor,
+        quantiles: torch.Tensor,    # [Q], ascending in (0,1)
+        sampled: bool = False):
+
+    if sampled:
+        q = quantiles.to(device=y_pred.device, dtype=y_pred.dtype)
+        pred_quantiles = torch.quantile(
+            y_pred, q, dim=-1).permute(1, 2, 0)  # [B, pred, Q]
+        print("pred quantiles", pred_quantiles.shape)
+    else:
+        # [B, pred, Q]
+        pred_quantiles = y_pred
+
+    pinball = quantileLoss(pred_quantiles, y_true, quantiles)
+    lower = pred_quantiles[..., 0]       # [B, pred]
+    upper = pred_quantiles[..., -1]      # [B, pred]
+    acr = ACR(y_true, upper, lower)
+    ail = AIL(y_true, upper, lower)
+
+    return {
+        "pinball": pinball,
+        "acr": acr,
+        "ail": ail
+    }
 
 
 class QRTrainer(nn.Module):
@@ -120,6 +189,7 @@ class QRTrainer(nn.Module):
         transform.set_device(self.device)
 
         with torch.no_grad():
+            metrics = []
             for xt, yt in test_loader:
                 xt_transformed = transform.transform(xt)
                 xt_transformed = xt_transformed.to(self.device)
@@ -129,10 +199,13 @@ class QRTrainer(nn.Module):
                 yt_transformed = yt_transformed.to(self.device)
 
                 out = self.model(xt_transformed)
-                out, _ = torch.sort(out, dim=-1)
-                loss = quantileLoss(out, yt_transformed,
-                                    quantiles=self.quantiles)
-                test_loss += loss.item()
+                # out, _ = torch.sort(out, dim=-1)
+                # loss = quantileLoss(out, yt_transformed,
+                #                     quantiles=self.quantiles)
+                # test_loss += loss.item()
+
+                metrics.append(compute_metrics(
+                    yt, out, self.quantiles, sampled=False))
 
                 out_reversed = transform.reverse(
                     transformed=out.unsqueeze(-1), reverse_col=0).squeeze()
@@ -141,14 +214,19 @@ class QRTrainer(nn.Module):
                 history.append([yt.cpu(), out_reversed.cpu()])
 
         test_res = torch.cat([
-            torch.stack([yt, out_reversed[:, :, 0],
-                        out_reversed[:, :, 1], out_reversed[:, :, 2]], dim=1)
+            torch.cat([yt.unsqueeze(-1), out_reversed], dim=-1)
             for yt, out_reversed in history
         ], dim=0)
+        print("res shape", test_res.shape)
 
-        avg_test_loss = test_loss / num_batches if num_batches > 0 else 0.0
+        # avg_test_loss = test_loss / num_batches if num_batches > 0 else 0.0
 
-        return avg_test_loss, test_res
+        metrics_dict = {
+            "pinball": np.mean([m['pinball'] for m in metrics]),
+            "acr": np.mean([m['acr'] for m in metrics]),
+            "ail": np.mean([m['ail'] for m in metrics])
+        }
+        return metrics_dict, test_res
 
 
 @torch.no_grad()
@@ -195,9 +273,9 @@ def sample_ddpm_model(
             else:
                 y_t = y_mean
 
-        samples.append(y_t.unsqueeze(0))
+        samples.append(y_t.unsqueeze(-1))
 
-    return torch.cat(samples, dim=0)   # [num_samples, *out_shape]
+    return torch.cat(samples, dim=-1)   # [*out_shape, num_samples]
 
 
 class DDPMTrainer(nn.Module):
@@ -309,3 +387,54 @@ class DDPMTrainer(nn.Module):
                 + (f", val loss = {eval_epoch_loss:.6f}" if eval_epoch_loss is not None else "")
                 + f", lr={lr:.2e}"
             )
+
+    def test(self, test_loader: DataLoader, transform, variance_sched: torch.Tensor, num_samples: int, quantiles=torch.Tensor([0.1, 0.5, 0.9])):
+        self.model.eval()
+        test_loss = 0.0
+        num_batches = 0
+
+        history = []
+
+        transform.set_device(self.device)
+
+        with torch.no_grad():
+            metrics = []
+            for xt, yt in test_loader:
+                xt_transformed = transform.transform(xt)
+                xt_transformed = xt_transformed.to(self.device)
+
+                yt_transformed = transform.transform(
+                    yt.unsqueeze(-1), transform_col=0).squeeze()
+                yt_transformed = yt_transformed.to(self.device)
+
+                out_shape = yt.shape
+                out = sample_ddpm_model(self.model, variance_sched, cond=xt,
+                                        out_shape=out_shape, num_samples=num_samples, device=self.device)
+                # out, _ = torch.sort(out, dim=-1)
+                # loss = quantileLoss(out, yt_transformed,
+                #                     quantiles=self.quantiles)
+                # test_loss += loss.item()
+
+                metrics.append(compute_metrics(
+                    yt, out, quantiles.to(self.device), sampled=True))
+
+                out_reversed = transform.reverse(
+                    transformed=out.unsqueeze(-1), reverse_col=0).squeeze()
+
+                num_batches += 1
+                history.append([yt.cpu(), out_reversed.cpu()])
+
+        test_res = torch.cat([
+            torch.cat([yt.unsqueeze(-1), out_reversed], dim=-1)
+            for yt, out_reversed in history
+        ], dim=0)
+        print("res shape", test_res.shape)
+
+        # avg_test_loss = test_loss / num_batches if num_batches > 0 else 0.0
+
+        metrics_dict = {
+            "pinball": np.mean([m['pinball'] for m in metrics]),
+            "acr": np.mean([m['acr'] for m in metrics]),
+            "ail": np.mean([m['ail'] for m in metrics])
+        }
+        return metrics_dict, test_res
