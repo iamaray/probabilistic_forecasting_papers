@@ -12,9 +12,7 @@ from dal_net.model import DALNet
 from dal_net.layers import HeadSpec
 
 
-def dalnet_test(train_loader, val_loader, test_loader, transform):
-    x_sample, y_sample = next(iter(train_loader))
-    print(f"Training data shapes: X={x_sample.shape}, Y={y_sample.shape}")
+def dalnet_test(train_loader, val_loader, test_loader, transform, in_shape, label_shape, device):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -31,13 +29,13 @@ def dalnet_test(train_loader, val_loader, test_loader, transform):
 
     model = DALNet(
         lstm_hidden_dim=256,
-        num_feats=x_sample.shape[-1],       # number of exogenous features
+        num_feats=in_shape[-1],       # number of exogenous features
         dt=16,              # diffusion step embedding dim
         cond_dim=16,        # condition projection dim
         head_types=head_types,
         num_lstm_layers=2,
         num_conv_layers=3,
-        pred_seq_len=24,
+        pred_seq_len=label_shape[1],
         device=device,
     ).to(device)
 
@@ -72,15 +70,13 @@ def dalnet_test(train_loader, val_loader, test_loader, transform):
         f"Pinball:{metrics['pinball']}, ACR:{metrics['acr']}, AIL:{metrics['ail']}")
 
 
-def qlstm_test(train_loader, val_loader, test_loader, transform):
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+def qlstm_test(train_loader, val_loader, test_loader, transform, in_shape, label_shape, device):
     model = QLSTM(
-        input_size=x_sample.shape[-1],
+        input_size=in_shape[-1],
         hidden_size=512,
         num_layers=4,
         min_gap=1e-4,
+        forecast_length=label_shape[1],
         dropout=0.1
     )
 
@@ -94,11 +90,20 @@ def qlstm_test(train_loader, val_loader, test_loader, transform):
         f"Pinball:{metrics['pinball']}, ACR:{metrics['acr']}, AIL:{metrics['ail']}")
 
 
-def qmlp_test(train_loader, val_loader, test_loader, transform):
-    pass
+def qmlp_test(train_loader, val_loader, test_loader, transform, in_shape, label_shape, device):
+    model = QMLP(
+        in_dim=in_shape[-2] * in_shape[-1],
+        frc_dim=label_shape[1],
+        depth=3,
+        hidden_size=256,
+        device=device,
+        strict_eps=1e-4
+    )
 
 
 if __name__ == "__main__":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     parser = argparse.ArgumentParser(
         description='Run model training or grid search based on configuration file')
     parser.add_argument('--model', type=str, required=True,
@@ -127,12 +132,12 @@ if __name__ == "__main__":
 
     if args.model == 'qmlp':
         qmlp_test(train_loader, val_loader, test_loader,
-                  transform, in_shape, label_shape)
+                  transform, in_shape, label_shape, device)
 
     if args.model == 'qlstm':
         qlstm_test(train_loader, val_loader, test_loader,
-                   transform, in_shape, label_shape)
+                   transform, in_shape, label_shape, device)
 
     if args.model == "dalnet":
         dalnet_test(train_loader, val_loader, test_loader,
-                    transform, in_shape, label_shape)
+                    transform, in_shape, label_shape, device)
