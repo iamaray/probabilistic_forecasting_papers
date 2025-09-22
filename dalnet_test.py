@@ -31,17 +31,17 @@ def main():
 
     head_types: List[HeadSpec] = [
         HeadSpec("global"),
-        # HeadSpec("global"),
-        # HeadSpec("window", window=4),
-        # HeadSpec("window", window=4),
-        # HeadSpec("dilated", window=4, dilation=2),
-        # HeadSpec("dilated", window=4, dilation=2),
-        # HeadSpec("window", window=2),
-        # HeadSpec("window", window=2)
+        HeadSpec("global"),
+        HeadSpec("window", window=4),
+        HeadSpec("window", window=4),
+        HeadSpec("dilated", window=4, dilation=2),
+        HeadSpec("dilated", window=4, dilation=2),
+        HeadSpec("window", window=2),
+        HeadSpec("window", window=2)
     ]
 
     model = DALNet(
-        lstm_hidden_dim=10,
+        lstm_hidden_dim=256,
         num_feats=10,       # number of exogenous features
         dt=16,              # diffusion step embedding dim
         cond_dim=16,        # condition projection dim
