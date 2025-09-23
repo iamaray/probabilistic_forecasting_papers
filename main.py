@@ -5,6 +5,7 @@ from lstm.model import QLSTM
 import matplotlib.pyplot as plt
 import numpy as np
 import argparse
+from typing import List
 
 from processing.transforms import *
 from trainers import QRTrainer, DDPMTrainer, sample_ddpm_model
@@ -19,12 +20,12 @@ def dalnet_test(train_loader, val_loader, test_loader, transform, in_shape, labe
     head_types: List[HeadSpec] = [
         HeadSpec("global"),
         HeadSpec("global"),
-        HeadSpec("window", window=4),
-        HeadSpec("window", window=4),
+        HeadSpec("window",  window=4),
+        HeadSpec("window",  window=4),
         HeadSpec("dilated", window=4, dilation=2),
         HeadSpec("dilated", window=4, dilation=2),
-        HeadSpec("window", window=2),
-        HeadSpec("window", window=2)
+        HeadSpec("window",  window=2),
+        HeadSpec("window",  window=2)
     ]
 
     model = DALNet(
@@ -83,7 +84,7 @@ def qlstm_test(train_loader, val_loader, test_loader, transform, in_shape, label
     trainer = QRTrainer(model, device)
 
     trainer.train(train_loader=train_loader,
-                  val_loader=val_loader, num_epochs=300)
+                  val_loader=val_loader, num_epochs=3)
 
     metrics, _ = trainer.test(test_loader, transform)  # [B, L, Q]
     print(
@@ -104,7 +105,7 @@ def qmlp_test(train_loader, val_loader, test_loader, transform, in_shape, label_
     trainer = QRTrainer(model, device)
 
     trainer.train(train_loader=train_loader,
-                  val_loader=val_loader, num_epochs=300)
+                  val_loader=val_loader, num_epochs=10)
 
     metrics, _ = trainer.test(test_loader, transform)  # [B, L, Q]
     print(

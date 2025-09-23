@@ -43,7 +43,7 @@ def ACR(y: torch.Tensor, frc_top: torch.Tensor, frc_bottom: torch.Tensor):
     valid = torch.isfinite(y) & torch.isfinite(lower) & torch.isfinite(upper)
     if valid.sum() == 0:
         return torch.tensor(float('nan'), device=y.device)
-
+    # print('here')
     covered = (y >= lower) & (y <= upper)
     return (covered & valid).float().sum() / valid.float().sum()
 
@@ -191,6 +191,9 @@ class QRTrainer(nn.Module):
         with torch.no_grad():
             metrics = []
             for xt, yt in test_loader:
+                yt = yt.to(self.device)
+                xt = xt.to(self.device)
+
                 xt_transformed = transform.transform(xt)
                 xt_transformed = xt_transformed.to(self.device)
 
@@ -205,13 +208,14 @@ class QRTrainer(nn.Module):
                 # test_loss += loss.item()
 
                 metrics.append(compute_metrics(
-                    yt, out, self.quantiles, sampled=False))
+                    yt_transformed.detach().cpu(), out.detach().cpu(), self.quantiles, sampled=False))
 
                 out_reversed = transform.reverse(
                     transformed=out.unsqueeze(-1), reverse_col=0).squeeze()
 
                 num_batches += 1
-                history.append([yt.cpu(), out_reversed.cpu()])
+                history.append(
+                    [yt.detach().cpu(), out_reversed.detach().cpu()])
 
         test_res = torch.cat([
             torch.cat([yt.unsqueeze(-1), out_reversed], dim=-1)
@@ -400,6 +404,9 @@ class DDPMTrainer(nn.Module):
         with torch.no_grad():
             metrics = []
             for xt, yt in test_loader:
+                xt = xt.to(self.device)
+                yt = yt.to(self.device)
+
                 xt_transformed = transform.transform(xt)
                 xt_transformed = xt_transformed.to(self.device)
 
@@ -416,13 +423,14 @@ class DDPMTrainer(nn.Module):
                 # test_loss += loss.item()
 
                 metrics.append(compute_metrics(
-                    yt, out, quantiles.to(self.device), sampled=True))
+                    yt_transformed.detach().cpu(), out, quantiles.detach().cpu(), sampled=True))
 
                 out_reversed = transform.reverse(
                     transformed=out.unsqueeze(-1), reverse_col=0).squeeze()
 
                 num_batches += 1
-                history.append([yt.cpu(), out_reversed.cpu()])
+                history.append(
+                    [yt.detach().cpu(), out_reversed.detach().cpu()])
 
         test_res = torch.cat([
             torch.cat([yt.unsqueeze(-1), out_reversed], dim=-1)
