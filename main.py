@@ -94,11 +94,21 @@ def qmlp_test(train_loader, val_loader, test_loader, transform, in_shape, label_
     model = QMLP(
         in_dim=in_shape[-2] * in_shape[-1],
         frc_dim=label_shape[1],
-        depth=3,
-        hidden_size=256,
+        depth=5,
+        hidden_size=512,
         device=device,
+        dropout=0.2,
         strict_eps=1e-4
     )
+
+    trainer = QRTrainer(model, device)
+
+    trainer.train(train_loader=train_loader,
+                  val_loader=val_loader, num_epochs=300)
+
+    metrics, _ = trainer.test(test_loader, transform)  # [B, L, Q]
+    print(
+        f"Pinball:{metrics['pinball']}, ACR:{metrics['acr']}, AIL:{metrics['ail']}")
 
 
 if __name__ == "__main__":
