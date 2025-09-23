@@ -202,10 +202,6 @@ class QRTrainer(nn.Module):
                 yt_transformed = yt_transformed.to(self.device)
 
                 out = self.model(xt_transformed)
-                # out, _ = torch.sort(out, dim=-1)
-                # loss = quantileLoss(out, yt_transformed,
-                #                     quantiles=self.quantiles)
-                # test_loss += loss.item()
 
                 metrics.append(compute_metrics(
                     yt_transformed.detach().cpu(), out.detach().cpu(), self.quantiles, sampled=False))
@@ -417,10 +413,6 @@ class DDPMTrainer(nn.Module):
                 out_shape = yt.shape
                 out = sample_ddpm_model(self.model, variance_sched, cond=xt,
                                         out_shape=out_shape, num_samples=num_samples, device=self.device)
-                # out, _ = torch.sort(out, dim=-1)
-                # loss = quantileLoss(out, yt_transformed,
-                #                     quantiles=self.quantiles)
-                # test_loss += loss.item()
 
                 metrics.append(compute_metrics(
                     yt_transformed.detach().cpu(), out, quantiles.detach().cpu(), sampled=True))
