@@ -68,16 +68,23 @@ def compute_metrics(
         quantiles: torch.Tensor,    # [Q], ascending in (0,1)
         sampled: bool = False):
 
+    print("any inf in y_pred:", torch.isinf(y_pred).any())
+    print("finite ratio:", torch.isfinite(y_pred).float().mean())
+    print("D (last dim) =", y_pred.shape[-1])   # should be > 0
+
+    q = quantiles.to(device=y_pred.device)
+    print("quantiles", q)
     if sampled:
-        q = quantiles.to(device=y_pred.device, dtype=y_pred.dtype)
         pred_quantiles = torch.quantile(
             y_pred, q, dim=-1).permute(1, 2, 0)  # [B, pred, Q]
+
+        print(f"quantiles have nan: {torch.isnan(pred_quantiles).any()}")
         print("pred quantiles", pred_quantiles.shape)
     else:
         # [B, pred, Q]
         pred_quantiles = y_pred
 
-    pinball = quantileLoss(pred_quantiles, y_true, quantiles)
+    pinball = quantileLoss(pred_quantiles, y_true, q)
     lower = pred_quantiles[..., 0]       # [B, pred]
     upper = pred_quantiles[..., -1]      # [B, pred]
     acr = ACR(y_true, upper, lower)
@@ -87,7 +94,7 @@ def compute_metrics(
         "pinball": pinball,
         "acr": acr,
         "ail": ail
-    }
+    }, pred_quantiles
 
 
 class QRTrainer(nn.Module):
@@ -202,9 +209,13 @@ class QRTrainer(nn.Module):
                 yt_transformed = yt_transformed.to(self.device)
 
                 out = self.model(xt_transformed)
+                # out, _ = torch.sort(out, dim=-1)
+                # loss = quantileLoss(out, yt_transformed,
+                #                     quantiles=self.quantiles)
+                # test_loss += loss.item()
 
                 metrics.append(compute_metrics(
-                    yt_transformed.detach().cpu(), out.detach().cpu(), self.quantiles, sampled=False))
+                    yt_transformed.detach().cpu(), out.detach().cpu(), self.quantiles.detach().cpu(), sampled=False)[0])
 
                 out_reversed = transform.reverse(
                     transformed=out.unsqueeze(-1), reverse_col=0).squeeze()
@@ -411,14 +422,25 @@ class DDPMTrainer(nn.Module):
                 yt_transformed = yt_transformed.to(self.device)
 
                 out_shape = yt.shape
-                out = sample_ddpm_model(self.model, variance_sched, cond=xt,
+                out = sample_ddpm_model(self.model, variance_sched, cond=xt_transformed,
                                         out_shape=out_shape, num_samples=num_samples, device=self.device)
+                # out, _ = torch.sort(out, dim=-1)
+                # loss = quantileLoss(out, yt_transformed,
+                #                     quantiles=self.quantiles)
+                # test_loss += loss.item()
 
-                metrics.append(compute_metrics(
-                    yt_transformed.detach().cpu(), out, quantiles.detach().cpu(), sampled=True))
+                # print('out ratio', out[:, :, 0] / yt_transformed)
+
+                mets, qtiles = compute_metrics(
+                    yt_transformed.detach().cpu(),
+                    out.detach().cpu(),
+                    quantiles.detach().cpu(),
+                    sampled=True)
+
+                metrics.append(mets)
 
                 out_reversed = transform.reverse(
-                    transformed=out.unsqueeze(-1), reverse_col=0).squeeze()
+                    transformed=qtiles.to(self.device).unsqueeze(-1), reverse_col=0).squeeze()
 
                 num_batches += 1
                 history.append(

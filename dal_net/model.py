@@ -55,7 +55,7 @@ class DALNet(nn.Module):
                                    out_channels=cond_dim, kernel_size=1)
 
         self.diffus_step_emb = nn.Sequential(
-            TimeEmb(device=self.device),          # (64,)
+            TimeEmb(self.device),          # (64,)
             nn.Linear(64, 128), nn.SiLU(),
             nn.Linear(128, dt), nn.SiLU()    # -> (dt,)
         )
